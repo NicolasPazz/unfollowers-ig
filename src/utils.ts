@@ -118,21 +118,45 @@ export async function getFollowers(page: Page, username: string) {
     await extractAndWriteUsernames(page, "followers.txt");
 }
 
-export async function getUnfollowers(page: Page) {
-    // obtener seguidores de followers.txt
+export async function getUnfollowers() {
+    const followingPath = path.resolve("data", "following.txt");
+    const followersPath = path.resolve("data", "followers.txt");
+    if (!fs.existsSync(followingPath) || !fs.existsSync(followersPath)) {
+        console.error("❌ Deben existir los archivos following.txt y followers.txt. Ejecuta primero las funciones correspondientes.");
+        return;
+    }
 
-    const followers = fs.readFileSync(path.resolve("data", "followers.txt"), "utf-8").split("\n");
-
-    // obtener seguidos de following.txt
     const following = fs.readFileSync(path.resolve("data", "following.txt"), "utf-8").split("\n");
+    const followers = fs.readFileSync(path.resolve("data", "followers.txt"), "utf-8").split("\n");
+    const unfollowers = following.filter((user) => !followers.includes(user));
 
-    // obtener unfollowers de la diferencia entre seguidores y seguidos
-    const unfollowers = followers.filter((user) => !following.includes(user));
-
-    // escribirlo en unfollowers.txt (si ya existe sobreescribirlo)
-    const outputPath = path.resolve("data", "unfollowers.txt");
+    const unfollowersCsvPath = path.resolve("data", "unfollowers.csv");
     fs.mkdirSync("data", { recursive: true });
-    fs.writeFileSync(outputPath, unfollowers.join("\n"), "utf-8");
 
-    console.log(`✅ Se guardaron ${unfollowers.length} unfollowers en ${outputPath}`);
+    let existingUsernames = new Set<string>();
+    if (fs.existsSync(unfollowersCsvPath)) {
+        const lines = fs.readFileSync(unfollowersCsvPath, "utf-8").split(/\r?\n/).filter(Boolean);
+        for (const line of lines.slice(1)) {
+            const cols = line.split(",");
+            if (cols[1]) existingUsernames.add(cols[1]);
+        }
+    }
+
+    const newRows = [];
+    for (const user of unfollowers) {
+        if (!existingUsernames.has(user)) {
+            const url = `https://www.instagram.com/${user}/`;
+            newRows.push(["true", user, url]);
+        }
+    }
+
+    let writeHeader = !fs.existsSync(unfollowersCsvPath);
+    const csvLines = newRows.map(row => row.join(","));
+    if (csvLines.length > 0) {
+        const toWrite = (writeHeader ? "marcado,usuario,url\n" : "") + csvLines.join("\n") + "\n";
+        fs.appendFileSync(unfollowersCsvPath, toWrite, "utf-8");
+        console.log(`✅ Se agregaron ${newRows.length} unfollowers nuevos a ${unfollowersCsvPath}`);
+    } else {
+        console.log("No hay nuevos unfollowers para agregar.");
+    }
 }

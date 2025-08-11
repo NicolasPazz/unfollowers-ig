@@ -43,7 +43,7 @@ function preguntar(): Promise<string> {
 			await getFollowing(page, username);
 			break;
 		case "3":
-			await getUnfollowers(page);
+			await getUnfollowers();
 			break;
 		case "4":
 			//await unfollow(page);
@@ -51,7 +51,7 @@ function preguntar(): Promise<string> {
 		case "5":
 			await getFollowers(page, username);
 			await getFollowing(page, username);
-			await getUnfollowers(page);
+			await getUnfollowers();
 			break;
 		default:
 			console.log("❌ Opción no válida. Terminando...");
