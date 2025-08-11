@@ -1,0 +1,31 @@
+{
+  "name": "unfollow-ig",
+  "version": "1.0.0",
+  "description": "",
+  "main": "mains.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node --loader ts-node/esm src/main.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NicolasPazz/unfollowers-ig.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/NicolasPazz/unfollowers-ig/issues"
+  },
+  "homepage": "https://github.com/NicolasPazz/unfollowers-ig#readme",
+  "devDependencies": {
+    "@types/node": "^24.2.0",
+    "playwright": "^1.54.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.1"
+  }
+}

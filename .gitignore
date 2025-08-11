@@ -1,5 +1,4 @@
-env/
-__pycache__/
+node_modules
+.env
+*.txt
 cookies.json
-config.env
-*.log
