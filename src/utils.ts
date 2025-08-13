@@ -3,6 +3,7 @@ import { expect } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { logger } from "./logger.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,7 +31,7 @@ async function openInstagramWithCookies(page: Page, username: string) {
     if (hayCookiesValidas()) {
         const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, "utf-8"));
         await context.addCookies(cookies);
-        console.log("🔁 Cookies cargadas");
+        logger.info("🔁 Cookies cargadas");
     }
 
     await page.goto(profileUrl);
@@ -57,12 +58,12 @@ async function openInstagramWithCookies(page: Page, username: string) {
         ),
     ]);
 
-    console.log("✅ Perfil cargado");
+    logger.info("✅ Perfil cargado");
 
     if (!hayCookiesValidas()) {
         const cookies = await context.cookies();
         fs.writeFileSync(COOKIES_PATH, JSON.stringify(cookies, null, 2));
-        console.log("💾 Cookies guardadas en cookies.json");
+        logger.info("💾 Cookies guardadas en cookies.json");
     }
 
     await page.waitForTimeout(1000);
@@ -79,7 +80,7 @@ async function scrollToBottom(page: Page) {
 
         const spinners = await page.$$('svg[aria-label="Cargando..."]');
         if (spinners.length === 0) {
-            console.log("✅ Fin del scroll");
+            logger.info("✅ Fin del scroll");
             await page.waitForTimeout(5000);
             break;
         }
@@ -101,7 +102,7 @@ async function extractAndWriteUsernames(page: Page, fileName: string) {
     fs.mkdirSync("data", { recursive: true });
     fs.writeFileSync(outputPath, usernames.join("\n"), "utf-8");
 
-    console.log(
+    logger.info(
         `✅ Se guardaron ${usernames.length} usuarios en ${outputPath}`
     );
     return usernames;
@@ -139,7 +140,7 @@ export async function getUnfollowers() {
     const followingPath = path.resolve("data", "following.txt");
     const followersPath = path.resolve("data", "followers.txt");
     if (!fs.existsSync(followingPath) || !fs.existsSync(followersPath)) {
-        console.error(
+        logger.error(
             "❌ Deben existir los archivos following.txt y followers.txt. Ejecuta primero las funciones correspondientes."
         );
         return;
@@ -190,11 +191,11 @@ export async function getUnfollowers() {
             csvLines.join("\n") +
             "\n";
         fs.appendFileSync(unfollowersCsvPath, toWrite, "utf-8");
-        console.log(
+        logger.info(
             `✅ Se agregaron ${newRows.length} unfollowers nuevos a ${unfollowersCsvPath}`
         );
     } else {
-        console.log("❌ No hay nuevos unfollowers para agregar.");
+        logger.info("❌ No hay nuevos unfollowers para agregar.");
     }
 }
 
@@ -204,23 +205,23 @@ async function unfollowUser(userName: string, page: Page) {
     const unfollowButton =
         "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.xjbqb8w.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.x1uhb9sk.x1plvlek.xryxfnj.x1iyjqo2.x2lwn1j.xeuugli.xdt5ytf.xqjyukv.x1cy8zhl.x1oa3qoh.x1nhvcw1";
 
-    console.log(`Iniciando unfollow para: ${userName}`);
+    logger.info(`Iniciando unfollow para: ${userName}`);
 
     await openInstagramWithCookies(page, userName);
 
-    console.log(`Esperando botón izquierdo...`);
+    logger.info(`Esperando botón izquierdo...`);
 
     await page.waitForSelector(followingButton);
     const siguiendo = (await leftButton.textContent()) == "Siguiendo";
     if (siguiendo) {
         await page.click(followingButton);
 
-        console.log(`Esperando botón de unfollow...`);
+        logger.info(`Esperando botón de unfollow...`);
 
         await page.waitForSelector(unfollowButton);
         await page.locator(unfollowButton).last().click();
 
-        console.log(`Esperando confirmación de unfollow...`);
+        logger.info(`Esperando confirmación de unfollow...`);
         await page.waitForRequest(
             (request) =>
                 request.method() === "POST" &&
@@ -230,11 +231,11 @@ async function unfollowUser(userName: string, page: Page) {
         await page.waitForTimeout(10000);
         expect(await leftButton.textContent()).toContain("Seguir");
 
-        console.log(`✅ Unfollowed ${userName}`);
+        logger.info(`✅ Unfollowed ${userName}`);
         return true;
     } else {
         expect(await leftButton.textContent()).toContain("Seguir");
-        console.error(`❌ No seguis a ${userName}`);
+        logger.error(`❌ No seguis a ${userName}`);
         return false;
     }
 }
@@ -252,7 +253,7 @@ function getRandomSleepMs() {
 export async function unfollow(page: Page) {
     const csvPath = path.resolve("data", "unfollowers.csv");
     if (!fs.existsSync(csvPath)) {
-        console.error(
+        logger.error(
             "❌ No existe data/unfollowers.csv. Generá el archivo con getUnfollowers()."
         );
         return;
@@ -263,7 +264,7 @@ export async function unfollow(page: Page) {
         .split(/\r?\n/)
         .filter(Boolean);
     if (lines.length <= 1) {
-        console.error(
+        logger.error(
             "❌ El CSV no tiene filas de datos (solo header o vacío)."
         );
         return;
@@ -290,7 +291,7 @@ export async function unfollow(page: Page) {
         )
         .filter(([marked, user]) => marked === "true" && user)
         .map(([, user]) => user);
-    console.log(`🔎 Marcados para unfollow:`, usersToUnfollow);
+    logger.info(`🔎 Marcados para unfollow:`, usersToUnfollow);
 
     const unfollowedPath = path.resolve("data", "unfollowed.txt");
     if (!fs.existsSync(unfollowedPath))
@@ -318,12 +319,12 @@ export async function unfollow(page: Page) {
 
         fs.appendFileSync(unfollowedPath, user + "\n", "utf-8");
 
-        console.log(`Proceso de unfollow finalizado para: ${user}`);
+        logger.info(`Proceso de unfollow finalizado para: ${user}`);
 
         if (unfollowed) {
             const sleepMs = getRandomSleepMs();
             if (sleepMs > 0) {
-                console.log(
+                logger.info(
                     `⏳ Esperando ${(sleepMs / 60000).toFixed(2)} minutos...`
                 );
                 await page.waitForTimeout(sleepMs);
