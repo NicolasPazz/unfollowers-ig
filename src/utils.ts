@@ -412,3 +412,245 @@ export async function unfollow(page: Page) {
 
     logger.info("✅ Unfollow process finished for all users.");
 }
+
+// ===========================================================================
+//  REVIEW MODE (Tinder-style): Unfollow / Keep (whitelist)
+// ===========================================================================
+
+// Users marked "true" in the CSV (the unfollow candidates).
+function getMarkedUsers(csvPath: string): string[] {
+    const lines = fs
+        .readFileSync(csvPath, "utf-8")
+        .split(/\r?\n/)
+        .filter(Boolean);
+    return lines
+        .slice(1)
+        .map((l) => l.split(";"))
+        .filter((c) => (c[0]?.trim().toLowerCase() ?? "") === "true" && c[1])
+        .map((c) => c[1] as string);
+}
+
+// Changes a user's "marcado" flag in the CSV.
+function updateMarcado(csvPath: string, username: string, unfollow: boolean) {
+    const lines = fs
+        .readFileSync(csvPath, "utf-8")
+        .split(/\r?\n/)
+        .filter(Boolean);
+    if (lines.length === 0) return;
+    const header = lines[0];
+    const data = lines.slice(1).map((line) => {
+        const cols = line.split(";");
+        if (cols[1] === username) cols[0] = unfollow ? "true" : "false";
+        return cols.join(";");
+    });
+    fs.writeFileSync(csvPath, [header, ...data].join("\n") + "\n", "utf-8");
+}
+
+export async function reviewUnfollowers(page: Page) {
+    const csvPath = path.resolve("data", "unfollowers.csv");
+    if (!fs.existsSync(csvPath)) {
+        logger.error(
+            "❌ data/unfollowers.csv does not exist. Generate it with option 3 first."
+        );
+        return;
+    }
+
+    const users = getMarkedUsers(csvPath);
+    if (users.length === 0) {
+        logger.info("✅ No unfollowers marked for review.");
+        return;
+    }
+    logger.info(
+        `🧭 Reviewing ${users.length} real profiles (Unfollow / Keep).`
+    );
+
+    await ensureSession(page);
+
+    const context = page.context();
+    const AHEAD = 3; // profiles preloaded ahead (in background tabs)
+
+    const pagesByIndex = new Map<number, Page>();
+    let cursor = 0;
+    let busy = false;
+    let finished = false;
+
+    let resolveDone: () => void = () => {};
+    const done = new Promise<void>((r) => (resolveDone = r));
+
+    async function loadProfile(p: Page, username: string) {
+        await p
+            .goto(`https://www.instagram.com/${username}/`, {
+                waitUntil: "domcontentloaded",
+            })
+            .catch(() => {});
+    }
+
+    async function ensureLoaded(i: number) {
+        if (i < 0 || i >= users.length || pagesByIndex.has(i)) return;
+        const user = users[i] as string;
+        const p = await context.newPage();
+        pagesByIndex.set(i, p);
+        await loadProfile(p, user);
+        await p
+            .evaluate(injectBar, {
+                username: user,
+                index: i,
+                total: users.length,
+            })
+            .catch(() => {});
+    }
+
+    async function preloadWindow() {
+        for (let i = cursor; i <= cursor + AHEAD; i++) await ensureLoaded(i);
+    }
+
+    async function finishReview() {
+        if (finished) return;
+        finished = true;
+        logger.info("🏁 Review finished.");
+        resolveDone();
+    }
+
+    // Page -> Node bridge: each floating bar calls __igReview.
+    await context.exposeFunction(
+        "__igReview",
+        async (action: string, username: string) => {
+            if (finished || busy) return;
+            busy = true;
+            try {
+                if (action === "quit") {
+                    await finishReview();
+                    return;
+                }
+                const unfollow = action === "unfollow";
+                updateMarcado(csvPath, username, unfollow);
+                logger.info(
+                    `${
+                        unfollow ? "🚫 Unfollow" : "✅ Keep (whitelist)"
+                    }: ${username} (${cursor + 1}/${users.length})`
+                );
+
+                const prev = pagesByIndex.get(cursor);
+                pagesByIndex.delete(cursor);
+                if (prev) prev.close().catch(() => {});
+
+                cursor++;
+                if (cursor >= users.length) {
+                    await finishReview();
+                    return;
+                }
+                await preloadWindow();
+                const cur = pagesByIndex.get(cursor);
+                if (cur) await cur.bringToFront().catch(() => {});
+            } finally {
+                busy = false;
+            }
+        }
+    );
+
+    // The first profile uses the main tab; the next ones are preloaded.
+    pagesByIndex.set(0, page);
+    await loadProfile(page, users[0] as string);
+    await page
+        .evaluate(injectBar, {
+            username: users[0] as string,
+            index: 0,
+            total: users.length,
+        })
+        .catch(() => {});
+    await preloadWindow();
+    await page.bringToFront().catch(() => {});
+
+    await done;
+
+    // Close any preload tabs still open.
+    for (const [, p] of pagesByIndex) {
+        if (p !== page) await p.close().catch(() => {});
+    }
+}
+
+// Code that runs INSIDE each tab: adds a floating bar with the
+// Unfollow / Keep / Quit buttons on top of the real profile.
+// It does not cover the content: you can scroll the grid and open photos,
+// reels and stories normally. Only the bar captures clicks (pointer-events).
+function injectBar(arg: { username: string; index: number; total: number }) {
+    const w = window as any;
+    const username = arg.username;
+    if (document.getElementById("__ig_review_bar")) return;
+
+    const bar = document.createElement("div");
+    bar.id = "__ig_review_bar";
+    bar.setAttribute(
+        "style",
+        [
+            "position:fixed",
+            "left:0",
+            "right:0",
+            "bottom:0",
+            "z-index:2147483647",
+            "display:flex",
+            "justify-content:center",
+            "pointer-events:none",
+            "padding:14px",
+            "font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif",
+        ].join(";")
+    );
+    bar.innerHTML =
+        '<div style="pointer-events:auto;display:flex;align-items:center;gap:10px;background:rgba(10,10,15,.92);border:1px solid #2a2a35;border-radius:16px;padding:10px 14px;box-shadow:0 10px 40px rgba(0,0,0,.55)">' +
+        '<span style="color:#aaa;font-size:13px;min-width:54px">' +
+        (arg.index + 1) +
+        " / " +
+        arg.total +
+        "</span>" +
+        '<span style="color:#fff;font-size:13px;font-weight:700;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@' +
+        username +
+        "</span>" +
+        '<button id="__ig_unfollow" style="border:none;border-radius:12px;background:#e0245e;color:#fff;font-size:14px;font-weight:700;padding:10px 14px;cursor:pointer">✖ Unfollow</button>' +
+        '<button id="__ig_keep" style="border:none;border-radius:12px;background:#17bf63;color:#fff;font-size:14px;font-weight:700;padding:10px 14px;cursor:pointer">✓ Keep</button>' +
+        '<button id="__ig_quit" style="border:1px solid #333;border-radius:12px;background:#1b1b22;color:#aaa;font-size:13px;padding:10px 12px;cursor:pointer">Quit</button>' +
+        "</div>";
+    document.body.appendChild(bar);
+
+    const call = (action: string) => {
+        try {
+            w.__igReview(action, username);
+        } catch (e) {}
+    };
+    (bar.querySelector("#__ig_unfollow") as HTMLElement).addEventListener(
+        "click",
+        () => call("unfollow")
+    );
+    (bar.querySelector("#__ig_keep") as HTMLElement).addEventListener(
+        "click",
+        () => call("keep")
+    );
+    (bar.querySelector("#__ig_quit") as HTMLElement).addEventListener(
+        "click",
+        () => call("quit")
+    );
+
+    if (!w.__igKeyBound) {
+        w.__igKeyBound = true;
+        window.addEventListener(
+            "keydown",
+            (e: any) => {
+                if (!document.getElementById("__ig_review_bar")) return;
+                if (e.key === "ArrowLeft" || e.key === "u" || e.key === "U") {
+                    e.preventDefault();
+                    call("unfollow");
+                } else if (
+                    e.key === "ArrowRight" ||
+                    e.key === "k" ||
+                    e.key === "K"
+                ) {
+                    e.preventDefault();
+                    call("keep");
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    call("quit");
+                }
+            },
+            true
+        );
+    }
+}

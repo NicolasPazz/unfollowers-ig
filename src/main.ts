@@ -6,6 +6,7 @@ import {
     getFollowing,
     getUnfollowers,
     unfollow,
+    reviewUnfollowers,
 } from "./utils.ts";
 
 const userName = process.env.IG_USERNAME;
@@ -24,6 +25,7 @@ function ask(): Promise<string> {
         console.log(`3) Get unfollowers`);
         console.log(`4) Run 1, 2 and 3`);
         console.log(`5) Unfollow the unfollowers`);
+        console.log(`6) Review unfollowers (Unfollow / Keep, Tinder-style)`);
 
         rl.question("Choose an option (1-6): ", (answer) => {
             resolve(answer.trim());
@@ -63,6 +65,9 @@ function ask(): Promise<string> {
             break;
         case "5":
             await unfollow(page);
+            break;
+        case "6":
+            await reviewUnfollowers(page);
             break;
         default:
             console.log("❌ Invalid option. Exiting...");
