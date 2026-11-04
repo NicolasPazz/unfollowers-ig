@@ -94,7 +94,7 @@ true;some_user;https://www.instagram.com/some_user/
 ```
 
 - `marcado` is the boolean deciding whether the user will be unfollowed.
-- **New rows are added with `marcado=true` by default** (everyone is a unfollow
+- **New rows are added with `marcado=true` by default** (everyone is an unfollow
   candidate until you decide otherwise).
 - Re-running option 3 only appends users not already present, so manual or
   reviewed edits are preserved.
@@ -158,8 +158,8 @@ After reviewing, run **option 5** to actually unfollow everyone still marked
   app can't recover, delete `cookies.json` and log in again.
 - **Instagram markup.** Scraping and the unfollow click rely on Instagram's
   (obfuscated, frequently changing) CSS classes and DOM structure. If a run
-  fails to find an element, those selectors in `src/utils.ts` likely need
-  updating.
+  fails to find an element, the selectors in `src/pages/selectors.ts` likely
+  need updating.
 - **Rate limits.** Unfollowing too fast can trigger action blocks. Set
   `MAX_PER_DAY` / `MAX_PER_HOUR` conservatively.
 - **Multiple tabs.** Review mode opens a few background tabs at once to preload
@@ -170,10 +170,14 @@ After reviewing, run **option 5** to actually unfollow everyone still marked
 
 ```
 src/
-  main.ts     Interactive menu and browser setup
-  utils.ts    Session handling, scraping, unfollow and review logic
-  logger.ts   Winston logger
-data/         Generated lists and CSV
+  main.ts                Interactive menu and browser setup
+  config.ts              Paths and settings read from .env
+  utils.ts               Scraping, unfollow and review logic
+  logger.ts              Winston logger
+  pages/
+    instagramPage.ts     Page object: session checks and UI actions
+    selectors.ts         CSS selectors and UI texts
+data/                    Generated lists and CSV
 ```
 
 ## Scripts
