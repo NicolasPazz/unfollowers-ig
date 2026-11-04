@@ -1,5 +1,4 @@
 import { Page } from "playwright";
-import { expect } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -11,40 +10,78 @@ export const COOKIES_PATH = path.resolve(__dirname, "../cookies.json");
 const MAX_PER_DAY = Number(process.env.MAX_PER_DAY);
 const MAX_PER_HOUR = Number(process.env.MAX_PER_HOUR);
 
-async function openInstagramWithCookies(page: Page, username: string) {
-    const profileUrl = `https://www.instagram.com/${username}/`;
+// Signals that there is NO session (Instagram login screen).
+// Instagram uses name="email" for the user and name="pass" for the password,
+// inside a <form id="login_form">. Older variants are covered too.
+const LOGGED_OUT_SELECTOR =
+    'form#login_form, form#loginForm, input[name="pass"], input[name="password"], input[name="email"][autocomplete~="username"], input[name="username"]';
 
+async function isLoggedIn(page: Page): Promise<boolean> {
+    // If Instagram redirected us to the login page, the session is invalid.
+    if (/\/accounts\/login/i.test(page.url())) return false;
+
+    // If the login form shows up, we are not logged in.
+    try {
+        await page
+            .locator(LOGGED_OUT_SELECTOR)
+            .first()
+            .waitFor({ state: "visible", timeout: 4000 });
+        return false;
+    } catch {
+        return true;
+    }
+}
+
+// Loads cookies, opens the home page and makes sure the session is active.
+// If it is not, it asks for a manual login and saves fresh cookies.
+async function ensureSession(page: Page) {
     const context = page.context();
 
-    const loginBtn = page.locator("#loginForm button div.html-div").first();
-    const isLoginVisible = await loginBtn
-        .isVisible({ timeout: 500 })
-        .catch(() => false);
-
-    if (isLoginVisible) {
-        console.log("❌ No estás logueado. Por favor, logueate manualmente.");
-        await page.waitForURL(
-            (url) =>
-                url.toString().startsWith("https://www.instagram.com/accounts"),
-            { timeout: 60000 }
-        );
-        await page.waitForURL(
-            (url) => url.toString() === "https://www.instagram.com/",
-            { timeout: 60000 }
-        );
-        const cookies = await context.cookies();
-        fs.writeFileSync(COOKIES_PATH, JSON.stringify(cookies, null, 2));
-        logger.info("💾 Cookies guardadas en cookies.json");
-    }
-
+    // 1) Load saved cookies (if any) before validating the session.
     if (fs.existsSync(COOKIES_PATH)) {
         const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, "utf-8"));
         await context.addCookies(cookies);
-    } else {
-        console.error(
-            "❌ No se encontraron cookies. Por favor, volve a intentar."
-        );
     }
+
+    // 2) Open the home page and check whether the session is REALLY active.
+    await page.goto("https://www.instagram.com/", {
+        waitUntil: "domcontentloaded",
+    });
+    await page.waitForTimeout(2000);
+
+    if (!(await isLoggedIn(page))) {
+        logger.warn(
+            "❌ Expired cookies or no session. Please log in manually in the open window..."
+        );
+
+        // Wait for the user to complete the login: the form disappears and we
+        // leave /accounts/login.
+        await page.waitForFunction(
+            (selector) =>
+                !document.querySelector(selector) &&
+                !location.pathname.startsWith("/accounts/login"),
+            LOGGED_OUT_SELECTOR,
+            { timeout: 180000 }
+        );
+        await page.waitForTimeout(3000);
+
+        // Re-validate the session before saving the cookies.
+        if (!(await isLoggedIn(page))) {
+            throw new Error("No valid session detected after manual login.");
+        }
+
+        const cookies = await context.cookies();
+        fs.writeFileSync(COOKIES_PATH, JSON.stringify(cookies, null, 2));
+        logger.info("💾 New cookies saved to cookies.json");
+    } else {
+        logger.info("✅ Valid session (cookies still active).");
+    }
+}
+
+async function openInstagramWithCookies(page: Page, username: string) {
+    const profileUrl = `https://www.instagram.com/${username}/`;
+
+    await ensureSession(page);
 
     await page.goto(profileUrl);
 
@@ -70,7 +107,7 @@ async function openInstagramWithCookies(page: Page, username: string) {
         ),
     ]);
 
-    logger.info("✅ Perfil cargado");
+    logger.info("✅ Profile loaded");
 
     await page.waitForTimeout(1000);
 }
@@ -84,9 +121,12 @@ async function scrollToBottom(page: Page) {
         iter++;
         await table.press("End");
 
-        const spinners = await page.$$('svg[aria-label="Cargando..."]');
+        // Loading spinner: match both Spanish and English Instagram UIs.
+        const spinners = await page.$$(
+            'svg[aria-label="Cargando..."], svg[aria-label="Loading..."]'
+        );
         if (spinners.length === 0) {
-            logger.info("✅ Fin del scroll");
+            logger.info("✅ Reached end of scroll");
             await page.waitForTimeout(5000);
             break;
         }
@@ -108,9 +148,7 @@ async function extractAndWriteUsernames(page: Page, fileName: string) {
     fs.mkdirSync("data", { recursive: true });
     fs.writeFileSync(outputPath, usernames.join("\n"), "utf-8");
 
-    logger.info(
-        `✅ Se guardaron ${usernames.length} usuarios en ${outputPath}`
-    );
+    logger.info(`✅ Saved ${usernames.length} users to ${outputPath}`);
     return usernames;
 }
 
@@ -147,7 +185,7 @@ export async function getUnfollowers() {
     const followersPath = path.resolve("data", "followers.txt");
     if (!fs.existsSync(followingPath) || !fs.existsSync(followersPath)) {
         logger.error(
-            "❌ Deben existir los archivos following.txt y followers.txt. Ejecuta primero las funciones correspondientes."
+            "❌ following.txt and followers.txt must exist. Run the corresponding options first."
         );
         return;
     }
@@ -185,6 +223,7 @@ export async function getUnfollowers() {
     for (const user of unfollowers) {
         if (!existingUsernames.has(user)) {
             const url = `https://www.instagram.com/${user}/`;
+            // New rows default to "true" (everyone is an unfollow candidate).
             newRows.push(["true", user, url]);
         }
     }
@@ -192,16 +231,17 @@ export async function getUnfollowers() {
     let writeHeader = !fs.existsSync(unfollowersCsvPath);
     const csvLines = newRows.map((row) => row.join(";"));
     if (csvLines.length > 0) {
+        // CSV columns: marcado;usuario;url  (flag;username;url)
         const toWrite =
             (writeHeader ? "marcado;usuario;url\n" : "") +
             csvLines.join("\n") +
             "\n";
         fs.appendFileSync(unfollowersCsvPath, toWrite, "utf-8");
         logger.info(
-            `✅ Se agregaron ${newRows.length} unfollowers nuevos a ${unfollowersCsvPath}`
+            `✅ Added ${newRows.length} new unfollowers to ${unfollowersCsvPath}`
         );
     } else {
-        logger.info("❌ No hay nuevos unfollowers para agregar.");
+        logger.info("❌ No new unfollowers to add.");
     }
 }
 
@@ -211,41 +251,45 @@ async function unfollowUser(userName: string, page: Page, retries = 1) {
     const unfollowButton =
         "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.xjbqb8w.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.x1uhb9sk.x1plvlek.xryxfnj.x1iyjqo2.x2lwn1j.xeuugli.xdt5ytf.xqjyukv.x1cy8zhl.x1oa3qoh.x1nhvcw1";
 
-    logger.info(`Iniciando unfollow para: ${userName}`);
+    logger.info(`Starting unfollow for: ${userName}`);
 
     await openInstagramWithCookies(page, userName);
 
-    logger.info(`Esperando botón izquierdo...`);
+    logger.info(`Waiting for the left button...`);
 
     try {
         await page.waitForSelector(followingButton);
     } catch (err) {
-        const unavailableText = await page
-            .locator("span.x4zkp8e")
-            .textContent()
-            .catch(() => null);
-        if (unavailableText?.includes("Esta página no está disponible.")) {
-            logger.warn(`❌ La página de ${userName} no está disponible.`);
+        const unavailableText =
+            (await page
+                .locator("span.x4zkp8e")
+                .textContent()
+                .catch(() => null)) ?? "";
+        // Matches both Spanish and English Instagram UIs.
+        if (/no está disponible|isn't available|not available/i.test(unavailableText)) {
+            logger.warn(`❌ The page for ${userName} is not available.`);
             return false;
         }
         throw err;
     }
 
-    const siguiendo = (await leftButton.textContent()) == "Siguiendo";
-    if (!siguiendo) {
-        expect(await leftButton.textContent()).toContain("Seguir");
-        logger.warn(`❌ No seguis a ${userName}`);
+    // Follow state from the button label, tolerant to Instagram's UI language:
+    // "Siguiendo"/"Following" (and requested states) vs "Seguir"/"Follow".
+    const leftText = ((await leftButton.textContent()) ?? "").trim();
+    const isFollowing = /^(siguiendo|following|solicitado|requested)/i.test(leftText);
+    if (!isFollowing) {
+        logger.warn(`❌ You don't follow ${userName}`);
         return false;
     }
 
     await page.click(followingButton);
 
-    logger.info(`Esperando botón de unfollow...`);
+    logger.info(`Waiting for the unfollow button...`);
 
     await page.waitForSelector(unfollowButton);
     await page.locator(unfollowButton).last().click();
 
-    logger.info(`Esperando confirmación de unfollow...`);
+    logger.info(`Waiting for unfollow confirmation...`);
     await page.waitForRequest(
         (request) =>
             request.method() === "POST" &&
@@ -254,21 +298,18 @@ async function unfollowUser(userName: string, page: Page, retries = 1) {
     ); // timeout
 
     await page.waitForTimeout(10000);
-    const unfollowed = (await leftButton.textContent()) == "Seguir";
+    const afterText = ((await leftButton.textContent()) ?? "").trim();
+    const unfollowed = /^(seguir|follow)/i.test(afterText);
 
     if (!unfollowed && retries > 0) {
-        logger.warn(
-            `❌ No se pudo hacer unfollow a ${userName}, reintentando...`
-        );
+        logger.warn(`❌ Could not unfollow ${userName}, retrying...`);
         return unfollowUser(userName, page, retries - 1);
     } else if (unfollowed) {
         logger.info(`✅ Unfollowed ${userName}`);
         return true;
     }
 
-    logger.error(
-        `❌ No se pudo hacer unfollow a ${userName} después de un reintento`
-    );
+    logger.error(`❌ Could not unfollow ${userName} after one retry`);
     return false;
 }
 
@@ -288,7 +329,7 @@ export async function unfollow(page: Page) {
     const csvPath = path.resolve("data", "unfollowers.csv");
     if (!fs.existsSync(csvPath)) {
         logger.error(
-            "❌ No existe data/unfollowers.csv. Generá el archivo con getUnfollowers()."
+            "❌ data/unfollowers.csv does not exist. Generate it with getUnfollowers()."
         );
         return;
     }
@@ -298,9 +339,7 @@ export async function unfollow(page: Page) {
         .split(/\r?\n/)
         .filter(Boolean);
     if (lines.length <= 1) {
-        logger.error(
-            "❌ El CSV no tiene filas de datos (solo header o vacío)."
-        );
+        logger.error("❌ The CSV has no data rows (header only or empty).");
         return;
     }
 
@@ -325,7 +364,7 @@ export async function unfollow(page: Page) {
         )
         .filter(([marked, user]) => marked === "true" && user)
         .map(([, user]) => user);
-    logger.info(`🔎 Marcados para unfollow: ${usersToUnfollow.join(", ")}`);
+    logger.info(`🔎 Marked for unfollow: ${usersToUnfollow.join(", ")}`);
 
     const unfollowedPath = path.resolve("data", "unfollowed.txt");
     if (!fs.existsSync(unfollowedPath))
@@ -353,10 +392,10 @@ export async function unfollow(page: Page) {
 
         fs.appendFileSync(unfollowedPath, user + "\n", "utf-8");
 
-        logger.info(`Proceso de unfollow finalizado para: ${user}`);
+        logger.info(`Unfollow process finished for: ${user}`);
 
         if (user === stopUserName) {
-            logger.info(`🛑 Deteniendo el unfollow en ${stopUserName}`);
+            logger.info(`🛑 Stopping unfollow at ${stopUserName}`);
             break;
         }
 
@@ -364,12 +403,12 @@ export async function unfollow(page: Page) {
             const sleepMs = getRandomSleepMs();
             if (sleepMs > 0) {
                 logger.info(
-                    `⏳ Esperando ${(sleepMs / 60000).toFixed(2)} minutos...`
+                    `⏳ Waiting ${(sleepMs / 60000).toFixed(2)} minutes...`
                 );
                 await page.waitForTimeout(sleepMs);
             }
         }
     }
 
-    logger.info("✅ Proceso de unfollow finalizado para todos los usuarios.");
+    logger.info("✅ Unfollow process finished for all users.");
 }

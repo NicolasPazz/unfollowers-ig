@@ -1,56 +1,52 @@
 import "dotenv/config";
 import readline from "readline";
-import fs from "fs";
 import { chromium } from "playwright";
 import {
     getFollowers,
     getFollowing,
     getUnfollowers,
     unfollow,
-    COOKIES_PATH,
 } from "./utils.ts";
 
 const userName = process.env.IG_USERNAME;
-if (!userName) throw new Error("IG_USERNAME no definido en .env");
+if (!userName) throw new Error("IG_USERNAME is not defined in .env");
 
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
 });
 
-function preguntar(): Promise<string> {
+function ask(): Promise<string> {
     return new Promise((resolve) => {
-        console.log(`\n¿Qué acción querés ejecutar?\n`);
-        console.log(`1) Obtener followers`);
-        console.log(`2) Obtener following`);
-        console.log(`3) Obtener unfollowers`);
-        console.log(`4) Ejecutar 1, 2 y 3`);
-        console.log(`5) Hacer unfollow a los unfollowers`);
+        console.log(`\nWhich action do you want to run?\n`);
+        console.log(`1) Get followers`);
+        console.log(`2) Get following`);
+        console.log(`3) Get unfollowers`);
+        console.log(`4) Run 1, 2 and 3`);
+        console.log(`5) Unfollow the unfollowers`);
 
-        rl.question("Elegí una opción (1-5): ", (respuesta) => {
-            resolve(respuesta.trim());
+        rl.question("Choose an option (1-6): ", (answer) => {
+            resolve(answer.trim());
         });
     });
 }
 
 (async () => {
-    const opcion = await preguntar();
+    const option = await ask();
 
     rl.close();
 
     const browser = await chromium.launch({ headless: false });
-    const context = await browser.newContext();
+    // bypassCSP: Instagram enforces a Content Security Policy that forbids
+    // 'unsafe-eval'. Without this, page.waitForFunction / page.$$eval fail with
+    // "Refused to evaluate a string as JavaScript...".
+    const context = await browser.newContext({ bypassCSP: true });
     const page = await context.newPage();
-    if (fs.existsSync(COOKIES_PATH)) {
-        const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, "utf-8"));
-        await context.addCookies(cookies);
-        console.log("✅ Cookies cargadas correctamente");
-    }
-    await page.goto("https://www.instagram.com/");
-    await page.waitForTimeout(5000);
-    console.log("✅ Home cargado correctamente");
+    // Cookie loading and session validation happen inside
+    // openInstagramWithCookies (it checks whether the session is still active
+    // and, if not, asks for a manual login and saves fresh cookies).
 
-    switch (opcion) {
+    switch (option) {
         case "1":
             await getFollowers(page, userName);
             break;
@@ -69,7 +65,7 @@ function preguntar(): Promise<string> {
             await unfollow(page);
             break;
         default:
-            console.log("❌ Opción no válida. Terminando...");
+            console.log("❌ Invalid option. Exiting...");
             break;
     }
 
